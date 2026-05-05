@@ -739,11 +739,16 @@
 
             async copyDownloadLink(url) {
                 try {
-                    await navigator.clipboard.writeText(window.location.origin + url);
+                    // Always prepend origin for relative URLs, use as-is for absolute
+                    const fullUrl = url.startsWith('http://') || url.startsWith('https://') 
+                        ? url 
+                        : window.location.origin + url;
+                    await navigator.clipboard.writeText(fullUrl);
                     this.setStatus('✅ Download link copied!', 'success');
                     setTimeout(() => this.setStatus(''), 2000);
                 } catch (err) {
                     this.setStatus('❌ Failed to copy', 'error');
+                    console.error('Copy error:', err);
                 }
             },
 

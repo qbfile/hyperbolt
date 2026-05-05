@@ -463,15 +463,6 @@ app.get('/list-hf-files', async (req, res) => {
 
             if (response.Contents) {
                 for (const obj of response.Contents) {
-                    const signedUrl = await getSignedUrl(
-                        storageClient,
-                        new GetObjectCommand({
-                            Bucket: storageBucket,
-                            Key: obj.Key
-                        }),
-                        { expiresIn: 3600 }
-                    );
-
                     files.push({
                         name: path.basename(obj.Key || ''),
                         filePath: obj.Key,
@@ -479,12 +470,12 @@ app.get('/list-hf-files', async (req, res) => {
                         size: obj.Size || 0,
                         sizeFormatted: formatBytes(obj.Size || 0),
                         created: obj.LastModified ? new Date(obj.LastModified).toLocaleString() : '',
-                        downloadUrl: signedUrl
+                        downloadUrl: `/download-file?filePath=${encodeURIComponent(obj.Key)}`
                     });
                 }
             }
 
-            res.json({ files });
+            res.json(files);
         } else {
             const files = [];
 
@@ -512,11 +503,11 @@ app.get('/list-hf-files', async (req, res) => {
             }
 
             if (!fs.existsSync(STORAGE_DIR)) {
-                return res.json({ files: [] });
+                return res.json([]);
             }
 
             walk(STORAGE_DIR);
-            res.json({ files });
+            res.json(files);
         }
     } catch (err) {
         console.error('List files error:', err);
@@ -558,6 +549,57 @@ app.delete('/delete-hf-file', express.json(), async (req, res) => {
     } catch (err) {
         console.error('Delete error:', err);
         res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// GET /download-file — Download a file (works for both B2 and local storage)
+app.get('/download-file', async (req, res) => {
+    const { filePath } = req.query;
+
+    if (!filePath) {
+        return res.status(400).json({ error: 'filePath is required' });
+    }
+
+    try {
+        if (STORAGE_BACKEND === 'b2') {
+            // Stream from B2
+            const command = new GetObjectCommand({
+                Bucket: storageBucket,
+                Key: filePath
+            });
+            const response = await storageClient.send(command);
+            
+            // Set download headers
+            const fileName = path.basename(filePath);
+            res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+            res.setHeader('Content-Type', response.ContentType || 'application/octet-stream');
+            
+            // Stream the body to the client
+            response.Body.pipe(res);
+        } else {
+            // Serve from local /data
+            const fullPath = filePath.startsWith(STORAGE_DIR) 
+                ? filePath 
+                : path.join(STORAGE_DIR, filePath);
+
+            // Security check
+            if (!fullPath.startsWith(STORAGE_DIR)) {
+                return res.status(403).json({ error: 'Invalid file path' });
+            }
+
+            if (!fs.existsSync(fullPath)) {
+                return res.status(404).json({ error: 'File not found' });
+            }
+
+            const fileName = path.basename(fullPath);
+            res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+            res.setHeader('Content-Type', 'application/octet-stream');
+            
+            fs.createReadStream(fullPath).pipe(res);
+        }
+    } catch (err) {
+        console.error('Download error:', err);
+        res.status(500).json({ error: err.message });
     }
 });
 
