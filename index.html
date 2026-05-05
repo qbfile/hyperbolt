@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>My Shared Browser</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #0a0e1a;
+            color: #e0e0e0;
+            font-family: sans-serif;
+            padding: 16px;
+            min-height: 100vh;
+        }
+        h1 {
+            font-size: 1.4rem;
+            margin-bottom: 14px;
+            color: #fff;
+        }
+
+        #controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: flex-end;
+            background: #16213e;
+            padding: 14px 20px;
+            border-radius: 12px;
+            margin-bottom: 12px;
+            width: 100%;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .control-group label {
+            font-size: 0.68rem;
+            color: #aaa;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        select, input[type="text"] {
+            background: #0f3460;
+            color: #fff;
+            border: 1px solid #2a4a80;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 0.85rem;
+        }
+
+        input[type="text"]::placeholder { color: #7799cc; }
+
+        input[type="range"] {
+            width: 110px;
+            cursor: pointer;
+            accent-color: #7b2ff7;
+        }
+
+        #volume-display {
+            font-size: 0.75rem;
+            color: #aaa;
+            min-width: 38px;
+            text-align: right;
+        }
+
+        button {
+            background: #7b2ff7;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 16px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+        button:hover  { background: #9b4fff; }
+        button:disabled { background: #444; cursor: not-allowed; }
+        .btn-danger   { background: #c0392b; }
+        .btn-danger:hover { background: #e74c3c; }
+
+        .badge {
+            background: #0f3460;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            color: #7b2ff7;
+            border: 1px solid #2a4a80;
+            align-self: center;
+        }
+
+        #live-controls {
+            display: none;
+            margin-bottom: 12px;
+        }
+
+        #status {
+            font-size: 0.85rem;
+            color: #7b2ff7;
+            margin-bottom: 10px;
+            min-height: 1.2em;
+        }
+
+        #hb-container {
+            width: 100%;
+            height: 72vh;
+            background: #111;
+            border-radius: 8px;
+            border: 1px solid #2a4a80;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #555;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <h1>🌐 Shared Browser</h1>
+
+    <!-- Launch controls -->
+    <div id="controls">
+        <div class="control-group">
+            <label>API Key</label>
+            <select id="keymode" style="font-weight:600;">
+                <option value="test">🔑 Test (2 sessions)</option>
+                <option value="prod">🚀 Production (10 sessions)</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label>Resolution</label>
+            <select id="resolution">
+                <option value="640x480">480p (640×480)</option>
+                <option value="1280x720" selected>720p (1280×720)</option>
+                <option value="1920x1080">1080p (1920×1080)</option>
+                <option value="2560x1440">1440p (2560×1440)</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label>Refresh Rate</label>
+            <select id="fps">
+                <option value="24">24 FPS</option>
+                <option value="30" selected>30 FPS</option>
+                <option value="60">60 FPS</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label>Start URL</label>
+            <input type="text" id="start-url" placeholder="https://www.google.com" style="width: 210px;" />
+        </div>
+
+        <div class="control-group">
+            <label>Session Name</label>
+            <input type="text" id="session-name" placeholder="My Watch Party" style="width:160px;" />
+        </div>
+
+        <div class="control-group">
+            <label>Note</label>
+            <input type="text" id="session-note" placeholder="Optional note..." style="width:160px;" />
+        </div>
+
+        <button id="launch-btn">🚀 Launch</button>
+        <button id="close-btn" class="btn-danger" style="display:none;">❌ Close Session</button>
+        <button id="new-session-btn" style="background:#1a6b3c;">🆕 New Session</button>
+        <button id="refresh-sessions-btn" style="background:#2a4a80;">🔄 Refresh Active</button>
+        <button id="close-all-btn" class="btn-danger">⛔ Close All Sessions</button>
+    </div>
+
+    <!-- Live controls (shown after session starts) -->
+    <div id="live-controls">
+        <div id="controls">
+            <div class="control-group">
+                <label>🔊 Volume</label>
+                <div style="display:flex;align-items:center;gap:6px;">
+                    <input type="range" id="volume" min="0" max="100" value="100" />
+                    <span id="volume-display">100%</span>
+                </div>
+            </div>
+
+            <button id="mute-btn">🔇 Mute</button>
+            <button id="fullscreen-btn">⛶ Fullscreen</button>
+            <button id="copy-link-btn">🔗 Copy Link</button>
+            <span class="badge" id="quality-badge">—</span>
+        </div>
+    </div>
+
+    <p id="status">Choose settings and click Launch</p>
+
+    <!-- Active sessions picker -->
+    <div id="session-picker" style="display:none; margin-bottom:12px;">
+        <div style="background:#16213e; border-radius:10px; padding:12px 16px;">
+            <div style="font-size:0.8rem; color:#aaa; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;">
+                Active Sessions — click one to connect
+            </div>
+            <div id="session-list" style="display:flex; flex-wrap:wrap; gap:10px;"></div>
+        </div>
+    </div>
+
+    <div id="hb-container">Click Launch to start a session</div>
+
+    <script type="module">
+        import Hyperbeam from "https://unpkg.com/@hyperbeam/web@latest/dist/index.js";
+
+        let hb = null;
+        let currentEmbedUrl = null;
+        let currentSessionId = null;
+        let isMuted = false;
+
+        const statusEl     = document.getElementById('status');
+        const container    = document.getElementById('hb-container');
+        const qualityBadge = document.getElementById('quality-badge');
+        const launchBtn    = document.getElementById('launch-btn');
+        const closeBtn     = document.getElementById('close-btn');
+        const liveControls = document.getElementById('live-controls');
+
+        function setStatus(msg, isError = false) {
+            statusEl.textContent = msg;
+            statusEl.style.color = isError ? '#e74c3c' : '#7b2ff7';
+        }
+
+        async function closeSession() {
+            if (currentSessionId) {
+                const km = document.getElementById('keymode').value;
+                try { await fetch(`/close-session/${currentSessionId}?keymode=${km}`, { method: 'DELETE' }); } catch {}
+            }
+            hb = null;
+            currentEmbedUrl = null;
+            currentSessionId = null;
+            container.innerHTML = 'Click Launch to start a session';
+            container.style.height = '72vh';
+            liveControls.style.display = 'none';
+            closeBtn.style.display = 'none';
+            launchBtn.textContent = '🚀 Launch';
+            qualityBadge.textContent = '—';
+            setStatus('Session closed');
+        }
+
+        // Shared embed function — used by both Launch and Connect
+        async function embedSession(data, badge) {
+            currentEmbedUrl  = data.embed_url;
+            currentSessionId = data.session_id || null;
+
+            // Show controls immediately so Copy Link works even if WebRTC times out
+            qualityBadge.textContent = badge;
+            liveControls.style.display = 'block';
+            closeBtn.style.display = 'inline-block';
+            launchBtn.textContent = '🔄 Relaunch';
+            document.getElementById('session-picker').style.display = 'none';
+            setStatus('Connecting...');
+
+            const w     = data.width  || 1280;
+            const h     = data.height || 720;
+            const maxW  = Math.min(w, window.innerWidth * 0.97);
+            container.style.height = Math.round(maxW * (h / w)) + 'px';
+            container.innerHTML = '';
+
+            try {
+                hb = await Hyperbeam(container, data.embed_url);
+                setStatus('✅ Connected!');
+            } catch (err) {
+                // TimedOut or other WebRTC error — session still exists, link still valid
+                setStatus('⚠️ WebRTC timed out — session created. Copy the link to open elsewhere.', true);
+                container.innerHTML = `<div style="text-align:center;padding:20px;color:#aaa;">
+                    <div style="font-size:1.1rem;margin-bottom:8px;">⚠️ Connection timed out</div>
+                    <div style="font-size:0.8rem;color:#666;">Your session is running. Use <strong style="color:#7b2ff7">🔗 Copy Link</strong> to open it in another browser or share it.</div>
+                </div>`;
+            }
+        }
+
+        launchBtn.addEventListener('click', async () => {
+            const resolution = document.getElementById('resolution').value;
+            const [width, height] = resolution.split('x').map(Number);
+            const fps      = document.getElementById('fps').value;
+            const startUrl = document.getElementById('start-url').value.trim() || 'https://www.google.com';
+
+            setStatus('Creating session...');
+            launchBtn.disabled = true;
+
+            try {
+                const sessionName = document.getElementById('session-name').value.trim() || 'Untitled Session';
+                const sessionNote = document.getElementById('session-note').value.trim();
+                const keymode = document.getElementById('keymode').value;
+                const params = new URLSearchParams({ width, height, fps, url: startUrl, name: sessionName, note: sessionNote, keymode });
+                const res  = await fetch(`/get-browser-session?${params}`);
+                const data = await res.json();
+                if (!res.ok)         throw new Error(data.message || 'Failed to create session');
+                if (!data.embed_url)  throw new Error('Missing embed_url in response');
+                await embedSession({ ...data, width, height }, `${width}×${height} @ ${fps}fps`);
+            } catch (err) {
+                console.error(err);
+                setStatus('Error: ' + err.message, true);
+            }
+
+            launchBtn.disabled = false;
+        });
+
+        document.getElementById('volume').addEventListener('input', (e) => {
+            const vol = e.target.value / 100;
+            document.getElementById('volume-display').textContent = e.target.value + '%';
+            if (hb) hb.volume = vol;
+        });
+
+        document.getElementById('mute-btn').addEventListener('click', () => {
+            if (!hb) return;
+            isMuted = !isMuted;
+            hb.volume = isMuted ? 0 : document.getElementById('volume').value / 100;
+            document.getElementById('mute-btn').textContent = isMuted ? '🔊 Unmute' : '🔇 Mute';
+        });
+
+        document.getElementById('fullscreen-btn').addEventListener('click', () => {
+            if (container.requestFullscreen) container.requestFullscreen();
+        });
+
+        document.getElementById('copy-link-btn').addEventListener('click', () => {
+            if (!currentEmbedUrl) return;
+            navigator.clipboard.writeText(currentEmbedUrl);
+            document.getElementById('copy-link-btn').textContent = '✅ Copied!';
+            setTimeout(() => {
+                document.getElementById('copy-link-btn').textContent = '🔗 Copy Link';
+            }, 2000);
+        });
+
+        closeBtn.addEventListener('click', closeSession);
+
+        document.getElementById('new-session-btn').addEventListener('click', async () => {
+            await closeSession();
+            launchBtn.click();
+        });
+
+        async function loadActiveSessions() {
+            const picker   = document.getElementById('session-picker');
+            const listEl   = document.getElementById('session-list');
+            try {
+                const km  = document.getElementById('keymode').value;
+                const res  = await fetch(`/get-active-sessions?keymode=${km}`);
+                const data = await res.json();
+                const allSessions = Array.isArray(data.results) ? data.results
+                    : Array.isArray(data) ? data : [];
+
+                // Only show sessions tagged with the current keymode
+                const sessions = allSessions.filter(s => {
+                    const skm = (s.metadata || {}).keymode;
+                    return !skm || skm === km; // show untagged legacy sessions under test
+                });
+
+                if (sessions.length === 0) {
+                    picker.style.display = 'none';
+                    setStatus('No active sessions found for this key');
+                    return;
+                }
+
+                listEl.innerHTML = '';
+                sessions.forEach((s, i) => {
+                    const id   = s.session_id || s.id;
+                    const date = s.creation_date ? new Date(s.creation_date).toLocaleTimeString() : '—';
+                    const meta = s.metadata || {};
+                    const name = meta.name || `Session ${i + 1}`;
+                    const note = meta.note || '';
+                    const card = document.createElement('div');
+                    card.style.cssText = 'position:relative;background:#0f3460;border:1px solid #2a4a80;border-radius:8px;padding:10px 14px 10px 14px;min-width:190px;max-width:220px;';
+                    card.innerHTML = `
+                        <button class="card-close-btn" title="Close session" style="position:absolute;top:6px;right:8px;background:none;border:none;color:#c0392b;font-size:1rem;cursor:pointer;line-height:1;padding:0;">✕</button>
+                        <div style="font-size:0.88rem;font-weight:700;color:#e0e0e0;margin-bottom:2px;padding-right:18px;">${name}</div>
+                        ${note ? `<div style="font-size:0.72rem;color:#9db4d8;margin-bottom:4px;font-style:italic;">${note}</div>` : ''}
+                        <div style="font-size:0.68rem;color:#7b9ccc;font-family:monospace;margin-bottom:4px;">${id.slice(0,18)}…</div>
+                        <div style="font-size:0.68rem;color:#555;margin-bottom:8px;">Started ${date}</div>
+                        <button class="card-connect-btn" style="width:100%;background:#7b2ff7;color:#fff;border:none;border-radius:6px;padding:5px 0;cursor:pointer;font-size:0.8rem;">▶ Connect</button>
+                    `;
+                    card.querySelector('.card-connect-btn').addEventListener('click', () => connectToSession(id));
+                    card.querySelector('.card-close-btn').addEventListener('click', async (e) => {
+                        e.stopPropagation();
+                        if (!confirm(`Close session "${name}"?`)) return;
+                        const km = document.getElementById('keymode').value;
+                        try {
+                            await fetch(`/close-session/${id}?keymode=${km}`, { method: 'DELETE' });
+                            // If this was the active session, reset the UI
+                            if (id === currentSessionId) { hb = null; currentEmbedUrl = null; currentSessionId = null; container.innerHTML = 'Click Launch to start a session'; liveControls.style.display = 'none'; closeBtn.style.display = 'none'; launchBtn.textContent = '🚀 Launch'; qualityBadge.textContent = '—'; }
+                            card.remove();
+                            const remaining = listEl.querySelectorAll('div').length;
+                            if (remaining === 0) picker.style.display = 'none';
+                            setStatus('Session closed');
+                        } catch (err) { setStatus('Error: ' + err.message, true); }
+                    });
+                    listEl.appendChild(card);
+                });
+
+                picker.style.display = 'block';
+                setStatus(`${sessions.length} active session(s)`);
+            } catch (err) {
+                setStatus('Error: ' + err.message, true);
+            }
+        }
+
+        async function connectToSession(sessionId) {
+            setStatus('Fetching session details...');
+            try {
+                const km  = document.getElementById('keymode').value;
+                const res  = await fetch(`/get-session/${sessionId}?keymode=${km}`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.message || 'Failed to get session');
+                if (!data.embed_url) throw new Error('No embed_url for this session');
+                await embedSession(data, '—');
+            } catch (err) {
+                setStatus('Error: ' + err.message, true);
+            }
+        }
+
+        document.getElementById('refresh-sessions-btn').addEventListener('click', loadActiveSessions);
+
+        // Reload sessions whenever the API key is switched
+        document.getElementById('keymode').addEventListener('change', loadActiveSessions);
+
+        // Auto-load active sessions on page open
+        loadActiveSessions();
+
+        document.getElementById('close-all-btn').addEventListener('click', async () => {
+            if (!confirm('Close ALL active sessions? This cannot be undone.')) return;
+            try {
+                const km  = document.getElementById('keymode').value;
+                const res  = await fetch(`/close-all-sessions?keymode=${km}`, { method: 'POST' });
+                const data = await res.json();
+                const closed = Array.isArray(data.results) ? data.results.length : 0;
+                hb = null;
+                currentEmbedUrl  = null;
+                currentSessionId = null;
+                container.innerHTML = 'Click Launch to start a session';
+                container.style.height = '72vh';
+                liveControls.style.display = 'none';
+                closeBtn.style.display = 'none';
+                launchBtn.textContent = '🚀 Launch';
+                qualityBadge.textContent = '—';
+                document.getElementById('session-picker').style.display = 'none';
+                setStatus(`Closed ${closed} session(s)`);
+            } catch (err) {
+                setStatus('Error: ' + err.message, true);
+            }
+        });
+    </script>
+</body>
+</html>
