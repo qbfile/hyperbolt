@@ -4,10 +4,34 @@ const fetch = require('node-fetch');
 const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
+const {
+    S3Client,
+    PutObjectCommand,
+    ListObjectsV2Command,
+    DeleteObjectCommand,
+    GetObjectCommand
+} = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const app = express();
 
 // ── Storage configuration ──
+const STORAGE_BACKEND = process.env.STORAGE_BACKEND || 'local';
 const STORAGE_DIR = '/data';
+const storageBucket = process.env.B2_BUCKET;
+
+// ── B2 Storage Client ──
+let storageClient = null;
+if (STORAGE_BACKEND === 'b2') {
+    storageClient = new S3Client({
+        region: process.env.B2_REGION || 'us-east-005',
+        endpoint: process.env.B2_ENDPOINT,
+        credentials: {
+            accessKeyId: process.env.B2_ACCESS_KEY,
+            secretAccessKey: process.env.B2_SECRET_KEY
+        }
+    });
+    console.log('✅ B2 storage connected');
+}
 
 // ── Local session store (persists names/notes/keymode since Hyperbeam API never returns metadata) ──
 const STORE_PATH = path.join(__dirname, 'sessions-store.json');
@@ -300,7 +324,7 @@ app.post('/close-all-sessions', async (req, res) => {
 
 // ── Download Manager Routes ──
 
-// POST /download-to-hf — Download a file from URL and save to /data
+// POST /download-to-hf — Download a file from URL and save to storage
 app.post('/download-to-hf', express.json(), async (req, res) => {
     const { url, folder, customName } = req.body;
 
@@ -360,21 +384,18 @@ app.post('/download-to-hf', express.json(), async (req, res) => {
         // Ensure filename is safe
         fileName = fileName.replace(/[<>:"|?*]/g, '_').replace(/\s+/g, '_');
 
-        // Determine save path
+        // Determine save path/key
         const subdir = folder ? folder.replace(/[^a-zA-Z0-9\-_]/g, '') : '';
         const savePath = subdir 
-            ? path.join(STORAGE_DIR, subdir, fileName)
-            : path.join(STORAGE_DIR, fileName);
+            ? `${subdir}/${fileName}`
+            : fileName;
 
-        // Security check
-        if (!savePath.startsWith(STORAGE_DIR)) {
-            return res.status(403).json({ success: false, error: 'Invalid save path' });
-        }
-
-        // Ensure directory exists
-        const saveDir = path.dirname(savePath);
-        if (!fs.existsSync(saveDir)) {
-            fs.mkdirSync(saveDir, { recursive: true });
+        // Security check for local storage
+        if (STORAGE_BACKEND === 'local') {
+            const fullPath = path.join(STORAGE_DIR, savePath);
+            if (!fullPath.startsWith(STORAGE_DIR)) {
+                return res.status(403).json({ success: false, error: 'Invalid save path' });
+            }
         }
 
         // Respond immediately with success
@@ -383,18 +404,45 @@ app.post('/download-to-hf', express.json(), async (req, res) => {
         // Download in background
         (async () => {
             try {
-                const response = await axios.get(url, { responseType: 'stream', timeout: 60000 });
-                response.data.pipe(fs.createWriteStream(savePath));
-                response.data.on('end', () => {
-                    console.log(`Downloaded: ${fileName} to ${savePath}`);
-                });
-                response.data.on('error', (err) => {
-                    console.error(`Download error for ${fileName}:`, err);
-                    try { fs.unlinkSync(savePath); } catch {}
-                });
+                if (STORAGE_BACKEND === 'b2') {
+                    // Download to buffer and upload to B2
+                    const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 60000 });
+                    const contentType = response.headers['content-type'] || 'application/octet-stream';
+                    
+                    const command = new PutObjectCommand({
+                        Bucket: storageBucket,
+                        Key: savePath,
+                        Body: response.data,
+                        ContentType: contentType
+                    });
+                    
+                    await storageClient.send(command);
+                    console.log(`Downloaded: ${fileName} to B2: ${savePath}`);
+                } else {
+                    // Local storage
+                    const fullPath = path.join(STORAGE_DIR, savePath);
+                    const saveDir = path.dirname(fullPath);
+                    if (!fs.existsSync(saveDir)) {
+                        fs.mkdirSync(saveDir, { recursive: true });
+                    }
+                    
+                    const response = await axios.get(url, { responseType: 'stream', timeout: 60000 });
+                    response.data.pipe(fs.createWriteStream(fullPath));
+                    response.data.on('end', () => {
+                        console.log(`Downloaded: ${fileName} to ${fullPath}`);
+                    });
+                    response.data.on('error', (err) => {
+                        console.error(`Download error for ${fileName}:`, err);
+                        try { fs.unlinkSync(fullPath); } catch {}
+                    });
+                }
             } catch (err) {
                 console.error(`Failed to download ${url}:`, err.message);
-                try { fs.unlinkSync(savePath); } catch {}
+                // For B2, no cleanup needed
+                if (STORAGE_BACKEND === 'local') {
+                    const fullPath = path.join(STORAGE_DIR, savePath);
+                    try { fs.unlinkSync(fullPath); } catch {}
+                }
             }
         })();
     } catch (err) {
@@ -403,66 +451,109 @@ app.post('/download-to-hf', express.json(), async (req, res) => {
     }
 });
 
-// GET /list-hf-files — List all files in /data directory
-app.get('/list-hf-files', (req, res) => {
+// GET /list-hf-files — List all files in storage
+app.get('/list-hf-files', async (req, res) => {
     try {
-        const files = [];
+        if (STORAGE_BACKEND === 'b2') {
+            const command = new ListObjectsV2Command({
+                Bucket: storageBucket
+            });
+            const response = await storageClient.send(command);
+            const files = [];
 
-        function walk(dir, relPath = '') {
-            const entries = fs.readdirSync(dir, { withFileTypes: true });
-            entries.forEach(entry => {
-                const fullPath = path.join(dir, entry.name);
-                const urlPath = relPath ? `${relPath}/${entry.name}` : entry.name;
+            if (response.Contents) {
+                for (const obj of response.Contents) {
+                    const signedUrl = await getSignedUrl(
+                        storageClient,
+                        new GetObjectCommand({
+                            Bucket: storageBucket,
+                            Key: obj.Key
+                        }),
+                        { expiresIn: 3600 }
+                    );
 
-                if (entry.isDirectory()) {
-                    walk(fullPath, urlPath);
-                } else if (entry.isFile()) {
-                    const stats = fs.statSync(fullPath);
                     files.push({
-                        name: entry.name,
-                        filePath: fullPath,
-                        urlPath,
-                        size: stats.size,
-                        sizeFormatted: formatBytes(stats.size),
-                        created: new Date(stats.birthtime).toLocaleString(),
-                        downloadUrl: `/storage-files/${urlPath}`
+                        name: path.basename(obj.Key || ''),
+                        filePath: obj.Key,
+                        urlPath: obj.Key,
+                        size: obj.Size || 0,
+                        sizeFormatted: formatBytes(obj.Size || 0),
+                        created: obj.LastModified ? new Date(obj.LastModified).toLocaleString() : '',
+                        downloadUrl: signedUrl
                     });
                 }
-            });
-        }
+            }
 
-        if (!fs.existsSync(STORAGE_DIR)) {
-            return res.json([]);
-        }
+            res.json({ files });
+        } else {
+            const files = [];
 
-        walk(STORAGE_DIR);
-        res.json(files);
+            function walk(dir, relPath = '') {
+                const entries = fs.readdirSync(dir, { withFileTypes: true });
+                entries.forEach(entry => {
+                    const fullPath = path.join(dir, entry.name);
+                    const urlPath = relPath ? `${relPath}/${entry.name}` : entry.name;
+
+                    if (entry.isDirectory()) {
+                        walk(fullPath, urlPath);
+                    } else if (entry.isFile()) {
+                        const stats = fs.statSync(fullPath);
+                        files.push({
+                            name: entry.name,
+                            filePath: fullPath,
+                            urlPath,
+                            size: stats.size,
+                            sizeFormatted: formatBytes(stats.size),
+                            created: new Date(stats.birthtime).toLocaleString(),
+                            downloadUrl: `/storage-files/${urlPath}`
+                        });
+                    }
+                });
+            }
+
+            if (!fs.existsSync(STORAGE_DIR)) {
+                return res.json({ files: [] });
+            }
+
+            walk(STORAGE_DIR);
+            res.json({ files });
+        }
     } catch (err) {
         console.error('List files error:', err);
         res.status(500).json({ error: err.message });
     }
 });
 
-// DELETE /delete-hf-file — Delete a file from /data
-app.delete('/delete-hf-file', express.json(), (req, res) => {
+// DELETE /delete-hf-file — Delete a file from storage
+app.delete('/delete-hf-file', express.json(), async (req, res) => {
     const { filePath } = req.body;
 
     if (!filePath) {
         return res.status(400).json({ success: false, error: 'filePath is required' });
     }
 
-    // Security check
-    if (!filePath.startsWith(STORAGE_DIR)) {
-        return res.status(403).json({ success: false, error: 'Invalid file path' });
-    }
-
     try {
-        if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-            console.log(`Deleted: ${filePath}`);
+        if (STORAGE_BACKEND === 'b2') {
+            const command = new DeleteObjectCommand({
+                Bucket: storageBucket,
+                Key: filePath
+            });
+            await storageClient.send(command);
+            console.log(`Deleted from B2: ${filePath}`);
             res.json({ success: true, message: 'File deleted' });
         } else {
-            res.status(404).json({ success: false, error: 'File not found' });
+            // Security check
+            if (!filePath.startsWith(STORAGE_DIR)) {
+                return res.status(403).json({ success: false, error: 'Invalid file path' });
+            }
+
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+                console.log(`Deleted: ${filePath}`);
+                res.json({ success: true, message: 'File deleted' });
+            } else {
+                res.status(404).json({ success: false, error: 'File not found' });
+            }
         }
     } catch (err) {
         console.error('Delete error:', err);
