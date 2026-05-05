@@ -3,7 +3,11 @@ const express = require('express');
 const fetch = require('node-fetch');
 const path = require('path');
 const fs = require('fs');
+const axios = require('axios');
 const app = express();
+
+// ── Storage configuration ──
+const STORAGE_DIR = '/data';
 
 // ── Local session store (persists names/notes/keymode since Hyperbeam API never returns metadata) ──
 const STORE_PATH = path.join(__dirname, 'sessions-store.json');
@@ -75,6 +79,18 @@ app.use((req, res, next) => {
 
     next();
 });
+
+// ── Helper function to format bytes ──
+function formatBytes(bytes) {
+    if (!bytes || bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+// ── Serve static files from /data ──
+app.use('/storage-files', express.static(STORAGE_DIR));
 
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
@@ -279,6 +295,178 @@ app.post('/close-all-sessions', async (req, res) => {
     } catch (err) {
         console.error("Fetch error:", err);
         res.status(500).json({ error: err.message });
+    }
+});
+
+// ── Download Manager Routes ──
+
+// POST /download-to-hf — Download a file from URL and save to /data
+app.post('/download-to-hf', express.json(), async (req, res) => {
+    const { url, folder, customName } = req.body;
+
+    if (!url) {
+        return res.status(400).json({ success: false, error: 'URL is required' });
+    }
+
+    try {
+        // Determine filename
+        let fileName = customName;
+
+        if (!fileName) {
+            // Try HEAD request for Content-Disposition
+            try {
+                const headRes = await axios.head(url, { timeout: 5000 });
+                const disposition = headRes.headers['content-disposition'];
+                if (disposition) {
+                    const match = disposition.match(/filename[^;=\n]*=(["\']?)([^"\';]*)\1/);
+                    if (match && match[2]) {
+                        fileName = match[2].trim();
+                    }
+                }
+            } catch (e) {
+                // HEAD might fail, continue with URL parsing
+            }
+
+            // If still no filename, parse URL
+            if (!fileName) {
+                const urlParts = url.split('/').filter(p => p);
+                const skipWords = ['download', 'api', 'files', 'get', 'fetch', 'resolve', 'main'];
+                
+                // Walk backwards through URL path segments
+                for (let i = urlParts.length - 1; i >= 0; i--) {
+                    let segment = decodeURIComponent(urlParts[i]);
+                    
+                    // Remove query params
+                    segment = segment.split('?')[0];
+                    
+                    // Check if it has a file extension
+                    const hasExtension = /\.[a-zA-Z0-9]{2,}$/.test(segment);
+                    
+                    if (hasExtension && !skipWords.includes(segment.toLowerCase())) {
+                        // Remove encoding artifacts like "encoded%3A" or "encoded:"
+                        segment = segment.replace(/encoded[:%]/g, '');
+                        fileName = segment;
+                        break;
+                    }
+                }
+
+                // Fallback
+                if (!fileName) {
+                    fileName = `file_${Date.now()}`;
+                }
+            }
+        }
+
+        // Ensure filename is safe
+        fileName = fileName.replace(/[<>:"|?*]/g, '_').replace(/\s+/g, '_');
+
+        // Determine save path
+        const subdir = folder ? folder.replace(/[^a-zA-Z0-9\-_]/g, '') : '';
+        const savePath = subdir 
+            ? path.join(STORAGE_DIR, subdir, fileName)
+            : path.join(STORAGE_DIR, fileName);
+
+        // Security check
+        if (!savePath.startsWith(STORAGE_DIR)) {
+            return res.status(403).json({ success: false, error: 'Invalid save path' });
+        }
+
+        // Ensure directory exists
+        const saveDir = path.dirname(savePath);
+        if (!fs.existsSync(saveDir)) {
+            fs.mkdirSync(saveDir, { recursive: true });
+        }
+
+        // Respond immediately with success
+        res.json({ success: true, fileName, savePath });
+
+        // Download in background
+        (async () => {
+            try {
+                const response = await axios.get(url, { responseType: 'stream', timeout: 60000 });
+                response.data.pipe(fs.createWriteStream(savePath));
+                response.data.on('end', () => {
+                    console.log(`Downloaded: ${fileName} to ${savePath}`);
+                });
+                response.data.on('error', (err) => {
+                    console.error(`Download error for ${fileName}:`, err);
+                    try { fs.unlinkSync(savePath); } catch {}
+                });
+            } catch (err) {
+                console.error(`Failed to download ${url}:`, err.message);
+                try { fs.unlinkSync(savePath); } catch {}
+            }
+        })();
+    } catch (err) {
+        console.error('Download error:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// GET /list-hf-files — List all files in /data directory
+app.get('/list-hf-files', (req, res) => {
+    try {
+        const files = [];
+
+        function walk(dir, relPath = '') {
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            entries.forEach(entry => {
+                const fullPath = path.join(dir, entry.name);
+                const urlPath = relPath ? `${relPath}/${entry.name}` : entry.name;
+
+                if (entry.isDirectory()) {
+                    walk(fullPath, urlPath);
+                } else if (entry.isFile()) {
+                    const stats = fs.statSync(fullPath);
+                    files.push({
+                        name: entry.name,
+                        filePath: fullPath,
+                        urlPath,
+                        size: stats.size,
+                        sizeFormatted: formatBytes(stats.size),
+                        created: new Date(stats.birthtime).toLocaleString(),
+                        downloadUrl: `/storage-files/${urlPath}`
+                    });
+                }
+            });
+        }
+
+        if (!fs.existsSync(STORAGE_DIR)) {
+            return res.json([]);
+        }
+
+        walk(STORAGE_DIR);
+        res.json(files);
+    } catch (err) {
+        console.error('List files error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// DELETE /delete-hf-file — Delete a file from /data
+app.delete('/delete-hf-file', express.json(), (req, res) => {
+    const { filePath } = req.body;
+
+    if (!filePath) {
+        return res.status(400).json({ success: false, error: 'filePath is required' });
+    }
+
+    // Security check
+    if (!filePath.startsWith(STORAGE_DIR)) {
+        return res.status(403).json({ success: false, error: 'Invalid file path' });
+    }
+
+    try {
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+            console.log(`Deleted: ${filePath}`);
+            res.json({ success: true, message: 'File deleted' });
+        } else {
+            res.status(404).json({ success: false, error: 'File not found' });
+        }
+    } catch (err) {
+        console.error('Delete error:', err);
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 

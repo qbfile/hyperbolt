@@ -7,7 +7,7 @@ A shared virtual browser application using the Hyperbeam API. Users can start a 
 - **Runtime**: Node.js 20
 - **Framework**: Express 5
 - **Frontend**: Vanilla HTML/JS served by Express
-- **Port**: 5000
+- **Port**: 7860
 
 ## Key Files
 - `server.js` — Express server; serves `index.html` and proxies Hyperbeam API calls

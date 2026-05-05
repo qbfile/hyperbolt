@@ -117,6 +117,164 @@
             color: #555;
             font-size: 0.9rem;
         }
+
+        /* ── Download Manager Styles ── */
+        #dl-manager {
+            background: #16213e;
+            border: 1px solid #2a4a80;
+            border-radius: 12px;
+            padding: 16px;
+            margin-top: 16px;
+        }
+
+        #dl-manager h3 {
+            font-size: 1rem;
+            margin-bottom: 12px;
+            color: #fff;
+        }
+
+        .dl-controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: flex-end;
+            margin-bottom: 12px;
+        }
+
+        .dl-input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .dl-input-group label {
+            font-size: 0.68rem;
+            color: #aaa;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        #dl-url-input {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        #dl-filename-input {
+            max-width: 180px;
+        }
+
+        #dl-folder-input {
+            max-width: 140px;
+        }
+
+        input[type="text"].dl-input {
+            background: #0f3460;
+            color: #fff;
+            border: 1px solid #2a4a80;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 0.85rem;
+        }
+
+        input[type="text"].dl-input::placeholder {
+            color: #7799cc;
+        }
+
+        .dl-button {
+            background: #7b2ff7;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 16px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+
+        .dl-button:hover {
+            background: #9b4fff;
+        }
+
+        .dl-button:disabled {
+            background: #444;
+            cursor: not-allowed;
+        }
+
+        .dl-button-refresh {
+            background: #2a4a80;
+        }
+
+        .dl-button-refresh:hover {
+            background: #3a5a90;
+        }
+
+        #dl-status {
+            font-size: 0.85rem;
+            margin-bottom: 10px;
+            min-height: 1.2em;
+            color: #aaa;
+        }
+
+        #dl-files-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .dl-file-card {
+            background: #0f3460;
+            border: 1px solid #2a4a80;
+            border-radius: 8px;
+            padding: 12px;
+            overflow: hidden;
+        }
+
+        .dl-file-name {
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: #e0e0e0;
+            margin-bottom: 4px;
+            word-break: break-word;
+        }
+
+        .dl-file-meta {
+            font-size: 0.75rem;
+            color: #7b9ccc;
+            margin-bottom: 8px;
+        }
+
+        .dl-file-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .dl-file-btn {
+            flex: 1;
+            background: #7b2ff7;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 6px 8px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            transition: background 0.2s;
+            min-width: 70px;
+        }
+
+        .dl-file-btn:hover {
+            background: #9b4fff;
+        }
+
+        .dl-file-btn-delete {
+            background: #c0392b;
+        }
+
+        .dl-file-btn-delete:hover {
+            background: #e74c3c;
+        }
     </style>
 </head>
 <body>
@@ -204,6 +362,36 @@
     </div>
 
     <div id="hb-container">Click Launch to start a session</div>
+
+    <!-- Download Manager -->
+    <div id="dl-manager">
+        <h3>💾 Download Manager</h3>
+        
+        <div class="dl-controls">
+            <div class="dl-input-group" style="flex: 1; min-width: 200px;">
+                <label>URL</label>
+                <input type="text" id="dl-url-input" class="dl-input" placeholder="https://example.com/file.mkv" />
+            </div>
+
+            <div class="dl-input-group">
+                <label>Filename (optional)</label>
+                <input type="text" id="dl-filename-input" class="dl-input" placeholder="custom_name.ext" />
+            </div>
+
+            <div class="dl-input-group">
+                <label>Subfolder (optional)</label>
+                <input type="text" id="dl-folder-input" class="dl-input" placeholder="movies" />
+            </div>
+
+            <button id="dl-paste-btn" class="dl-button">📋 Paste</button>
+            <button id="dl-save-btn" class="dl-button">💾 Save to /data</button>
+            <button id="dl-refresh-btn" class="dl-button dl-button-refresh">🔄 Refresh</button>
+        </div>
+
+        <div id="dl-status"></div>
+
+        <div id="dl-files-list"></div>
+    </div>
 
     <script type="module">
         import Hyperbeam from "https://unpkg.com/@hyperbeam/web@latest/dist/index.js";
@@ -442,6 +630,154 @@
                 setStatus('Error: ' + err.message, true);
             }
         });
+
+        // ── Download Manager ──
+        const dlMgr = {
+            statusEl: document.getElementById('dl-status'),
+            urlInput: document.getElementById('dl-url-input'),
+            filenameInput: document.getElementById('dl-filename-input'),
+            folderInput: document.getElementById('dl-folder-input'),
+            saveBtn: document.getElementById('dl-save-btn'),
+            pasteBtn: document.getElementById('dl-paste-btn'),
+            refreshBtn: document.getElementById('dl-refresh-btn'),
+            filesList: document.getElementById('dl-files-list'),
+
+            setStatus(msg, type = 'info') {
+                const colors = {
+                    info: '#aaa',
+                    loading: '#3498db',
+                    success: '#2ecc71',
+                    error: '#e74c3c'
+                };
+                this.statusEl.textContent = msg;
+                this.statusEl.style.color = colors[type] || colors.info;
+            },
+
+            async pasteFromClipboard() {
+                try {
+                    const text = await navigator.clipboard.readText();
+                    this.urlInput.value = text;
+                    this.setStatus('✅ URL pasted from clipboard', 'success');
+                } catch (err) {
+                    this.setStatus('❌ Failed to read clipboard', 'error');
+                }
+            },
+
+            async loadFiles() {
+                try {
+                    const res = await fetch('/list-hf-files');
+                    const files = await res.json();
+                    this.filesList.innerHTML = '';
+
+                    if (files.length === 0) {
+                        this.filesList.innerHTML = '<div style="grid-column: 1/-1; color: #777; font-size: 0.85rem; padding: 20px;">No files yet</div>';
+                        return;
+                    }
+
+                    files.forEach(file => {
+                        const card = document.createElement('div');
+                        card.className = 'dl-file-card';
+                        card.innerHTML = `
+                            <div class="dl-file-name">${file.name}</div>
+                            <div class="dl-file-meta">
+                                <div>${file.sizeFormatted}</div>
+                                <div style="font-size: 0.7rem; color: #666;">${file.created}</div>
+                            </div>
+                            <div class="dl-file-actions">
+                                <a href="${file.downloadUrl}" download class="dl-file-btn" style="text-decoration: none; display: flex; align-items: center; justify-content: center;">⬇️ Download</a>
+                                <button class="dl-file-btn" onclick="dlMgr.copyDownloadLink('${file.downloadUrl}')">📋 Copy</button>
+                                <button class="dl-file-btn dl-file-btn-delete" onclick="dlMgr.deleteFile('${file.filePath}')">🗑️ Delete</button>
+                            </div>
+                        `;
+                        this.filesList.appendChild(card);
+                    });
+                } catch (err) {
+                    this.setStatus('❌ Failed to load files', 'error');
+                    console.error(err);
+                }
+            },
+
+            async downloadFile() {
+                const url = this.urlInput.value.trim();
+                const folder = this.folderInput.value.trim();
+                const customName = this.filenameInput.value.trim();
+
+                if (!url) {
+                    this.setStatus('❌ Please enter a URL', 'error');
+                    return;
+                }
+
+                this.saveBtn.disabled = true;
+                this.setStatus('⏳ Starting download...', 'loading');
+
+                try {
+                    const res = await fetch('/download-to-hf', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url, folder, customName })
+                    });
+
+                    const data = await res.json();
+
+                    if (!res.ok || !data.success) {
+                        throw new Error(data.error || 'Download failed');
+                    }
+
+                    this.setStatus(`✅ Downloading: ${data.fileName}`, 'success');
+                    this.urlInput.value = '';
+                    this.filenameInput.value = '';
+                    this.folderInput.value = '';
+
+                    // Auto-refresh after 8 seconds
+                    setTimeout(() => this.loadFiles(), 8000);
+                } catch (err) {
+                    this.setStatus('❌ ' + err.message, 'error');
+                } finally {
+                    this.saveBtn.disabled = false;
+                }
+            },
+
+            async copyDownloadLink(url) {
+                try {
+                    await navigator.clipboard.writeText(window.location.origin + url);
+                    this.setStatus('✅ Download link copied!', 'success');
+                    setTimeout(() => this.setStatus(''), 2000);
+                } catch (err) {
+                    this.setStatus('❌ Failed to copy', 'error');
+                }
+            },
+
+            async deleteFile(filePath) {
+                if (!confirm('Delete this file?')) return;
+
+                try {
+                    const res = await fetch('/delete-hf-file', {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ filePath })
+                    });
+
+                    const data = await res.json();
+
+                    if (!res.ok || !data.success) {
+                        throw new Error(data.error || 'Delete failed');
+                    }
+
+                    this.setStatus('✅ File deleted', 'success');
+                    this.loadFiles();
+                } catch (err) {
+                    this.setStatus('❌ ' + err.message, 'error');
+                }
+            }
+        };
+
+        // Initialize Download Manager event listeners
+        dlMgr.pasteBtn.addEventListener('click', () => dlMgr.pasteFromClipboard());
+        dlMgr.saveBtn.addEventListener('click', () => dlMgr.downloadFile());
+        dlMgr.refreshBtn.addEventListener('click', () => dlMgr.loadFiles());
+
+        // Load files on page startup
+        dlMgr.loadFiles();
     </script>
 </body>
 </html>

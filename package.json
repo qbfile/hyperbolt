@@ -13,6 +13,7 @@
   "type": "commonjs",
   "dependencies": {
     "@hyperbeam/web": "^0.0.38",
+    "axios": "^1.16.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "node-fetch": "^2.7.0"
